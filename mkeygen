@@ -1,0 +1,116 @@
+#!/bin/bash
+
+DIR="/dev/shm"
+TMPSUBDIR="${DIR}/$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 32)"
+DEFAULTNAME="mkeygen"
+SIZE="256"
+BLKDEV="/dev/random"
+
+die() {
+  echo "$1"
+  exit 1
+}
+
+help_and_exit() {
+  echo "Usage: "
+  echo "$DEFAULTNAME"
+  echo " <options> /path/to/masterkeyfile"
+  echo "Options:"
+  echo "    -s, --size         Master key size in bits (must be divisible by 8)."
+  echo "    -w, --wipe-temp    Wipe temporary files after creation of master key (It must be used if the master key size is larger than than 512)."
+  echo "    -h, --help         It shows this menu."
+  exit "$1"
+}
+
+while [[ $# -gt 0 ]]; do
+  args="$1"
+  case ${args} in
+    -s|--size)
+      SIZE="$2"
+      shift
+
+      case ${SIZE} in
+          ''|*[!0-9]*) die "-s|--size must be a natural number." ;;
+      esac
+
+      if [ "${SIZE}" = "0" ]; then
+        die "Size of the key cannot be zero."
+      fi
+      
+      if [ "$(( ${SIZE} % 8 ))" != "0" ]; then
+        die "Key size must be multiple of 8."
+      fi
+    ;;
+    
+    -w|--wipe-temp)
+      if [ "${SIZE}" -lt "512" ]; then
+        die "Key size is less than 512. There will be nothing to clean."
+      fi
+      WIPETMP="y"
+      shift
+    ;;    
+
+    -h|--help)
+      help_and_exit 0
+    ;;
+
+    --)
+      shift
+      break
+    ;;
+
+    -*)
+      die "$args unknown option."
+    ;;
+
+    *)
+    break
+    ;;
+  esac
+  shift
+done
+
+if [ "$1" = "" ]; then
+  help_and_exit 1
+fi
+
+  if [ "${SIZE}" -lt "512" ]; then
+    dd if=${BLKDEV} count="$(( ${SIZE} / 4 ))" bs=1 &>/dev/null | \
+      b2sum --binary --length="${SIZE}" | cut -d " " -f 1 | \
+      sed 's/\([0-9A-F]\{2\}\)/\\\\\\x\1/gI' | xargs printf > "$@"
+  else
+    mkdir -p ${TMPSUBDIR}
+      for ((i=1;i<="$(( ${SIZE} / 512 ))";i++)); do
+        dd if=${BLKDEV} count=128 bs=1 &>/dev/null > \
+        ${TMPSUBDIR}/${DEFAULTNAME}.${i}
+      done
+      if [ "$(( ${SIZE} % 512 ))" != "0" ]; then
+        dd if=${BLKDEV} count="$(( (${SIZE} % 512 ) / 4 ))" bs=1 \
+        &>/dev/null > \
+        ${TMPSUBDIR}/${DEFAULTNAME}."$(( (${SIZE} / 512 ) + 1 ))"
+      fi
+      
+      cat ${TMPSUBDIR}/${DEFAULTNAME}.1 | b2sum --binary \
+        --length=512 | cut -d " " -f 1 | sed \
+        's/\([0-9A-F]\{2\}\)/\\\\\\x\1/gI' | xargs printf > "$@"
+        if [ "$(( ${SIZE} / 512 ))" > "2" ]; then
+          for ((i=2;i<="$(( ${SIZE} / 512 ))";i++)); do
+            cat ${TMPSUBDIR}/${DEFAULTNAME}.${i} \
+            ${TMPSUBDIR}/${DEFAULTNAME}."$(( ${i} - 1 ))" | \
+            b2sum --binary --length=512 | cut -d " " -f 1 | sed \
+              's/\([0-9A-F]\{2\}\)/\\\\\\x\1/gI' | xargs printf >> "$@"
+          done
+        fi
+        if [ "$(( ${SIZE} % 512 ))" != "0" ]; then
+          cat ${TMPSUBDIR}/${DEFAULTNAME}."$(( (${SIZE} / 512 ) + 1 ))" \
+            ${TMPSUBDIR}/${DEFAULTNAME}."$(( (${SIZE} / 512 ) ))" | \
+            b2sum --binary --length="$(( ${SIZE} % 512 ))" | cut -d " " \
+            -f 1 | sed 's/\([0-9A-F]\{2\}\)/\\\\\\x\1/gI' | xargs \
+            printf >> "$@"
+        fi
+        if [ "${WIPETMP}" = "y" ]; then
+          shred --iterations=10 --zero -u ${TMPSUBDIR}/* &>/dev/null
+        fi
+    rm -rf ${TMPSUBDIR}
+  fi
+ 

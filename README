@@ -1,0 +1,22 @@
+mkeygen - Master key generator
+==============================
+
+* Requirements: Coreutils from 2017 on, Sed and findutils (any regular 
+    Linux distribution should have these packages already installed).
+
+
+
+This is a simple script for generating master key files 
+in a secure way for using with cryptsetup or any other 
+encryption program that uses master key files that are 
+used directly by the cipher it uses.
+
+mkeygen takes random data from /dev/random and hashes
+with b2sum utility (Blake2b hash function).
+
+Keys larger than 512-bits of size are used in chained mode, better than
+hashing each chunk taken from /dev/random separately.
+
+Chunks gotten from /dev/random have twice the size of b2sum
+output for assuring that sufficient entropy will be get 
+from it.
